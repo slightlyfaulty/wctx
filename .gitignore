@@ -1,0 +1,5 @@
+/.idea
+/target
+.directory
+.DS_STORE
+*.min.js
