@@ -463,9 +463,9 @@ impl<'a> X11<'a> {
 
 		if let Some(d) = self.displays.iter().find(|d| {
 			cx >= d.x
-				&& cx < d.x + d.w
-				&& cy >= d.y
-				&& cy < d.y + d.h
+			&& cx < d.x + d.w
+			&& cy >= d.y
+			&& cy < d.y + d.h
 		}) {
 			return Some(d.name.clone());
 		}
@@ -550,9 +550,9 @@ impl Default for XWindow {
 			class: Default::default(),
 			pid: 0,
 			title: Default::default(),
-			r#type: Default::default(),
+			r#type: WindowType::None,
 			role: Default::default(),
-			state: Default::default(),
+			state: WindowState::None,
 			display: Default::default(),
 		}
 	}
