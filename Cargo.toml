@@ -9,10 +9,10 @@ repository = "https://github.com/slightlyfaulty/wctx"
 edition = "2021"
 
 [profile.release]
-panic = "abort" # skip unwind and exit on panic
-lto = true # enable Link Time Optimization (removes dead code)
-strip = true # strip symbols from the binary
-codegen-units = 1 # reduce parallel code generation units to increase optimization
+panic = "abort"
+lto = "fat"
+strip = true
+codegen-units = 1
 
 [dependencies]
 anyhow = "1.0.96"
