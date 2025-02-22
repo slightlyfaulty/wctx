@@ -1,7 +1,7 @@
 use super::*;
 use std::env;
 use std::path::PathBuf;
-//use std::io::{self, Write};
+use std::io::{self, Write};
 use zbus::{Connection, proxy};
 
 const EXT_UUID: &str = "wctx@slightlyfaulty.github.io";
@@ -32,33 +32,41 @@ pub async fn serve(service: &ServiceProxy<'_>) -> Result<()> {
 			return Err(anyhow!(cformat!("Failed to enable GNOME Shell extension \"<y!><s>{}</></>\". Please check that it's installed and loaded.", EXT_UUID)));
 		}
 
-		cprintln!("<y!>Installing GNOME Shell helper extension...");
-		
-		tokio::fs::create_dir(&ext_dir).await?;
-		tokio::fs::write(ext_dir.join("extension.js"), EXT_FILES[0]).await?;
-		tokio::fs::write(ext_dir.join("metadata.json"), EXT_FILES[1]).await?;
-
-		cprintln!("<b!>Extension installed successfully! Please log out and log back in to activate it.");
-		
-		service.application.set_status("The GNOME Shell helper extension was installed. Please log out and log back in to activate it.".into()).await?;
-
-		// TODO: Use this code when the extension gets accepted in the GNOME Shell Extensions directory
-		/*cprint!("<y!>Installing GNOME Shell helper extension...");
+		cprint!("<y!>Installing GNOME Shell helper extension...");
 		io::stdout().flush()?;
 
 		let result = extensions.installRemoteExtension(EXT_UUID).await;
 
 		if result.is_err() {
 			cprintln!(" <r!><s>FAILED!");
-			return Err(anyhow!("Unable to install from the GNOME Shell Extensions directory. Please install it manually: https://extensions.gnome.org/extension/62220/wctx/"));
+			cprintln!("<y!>Unable to install from the GNOME Shell Extensions directory. Installing files directly...");
+
+			tokio::fs::create_dir(&ext_dir).await?;
+			tokio::fs::write(ext_dir.join("extension.js"), EXT_FILES[0]).await?;
+			tokio::fs::write(ext_dir.join("metadata.json"), EXT_FILES[1]).await?;
+
+			cprintln!("<b!>Extension installed successfully! Please log out and log back in to activate it.");
+			service.application.set_status("The GNOME Shell helper extension was installed. Please log out and log back in to activate it.".into()).await?;
+			
+			return Ok(());
 		}
 
-		cprintln!(" <g!><s>SUCCESS!");
-		let enabled = extensions.enableExtension(EXT_UUID).await?;
+		let result = result?;
 
-		if !enabled {
-			return Err(anyhow!(cformat!("Failed to enable GNOME Shell extension \"<y!><s>{}</></>\". Please check that it's installed correctly.", EXT_UUID)));
-		}*/
+		if result == "successful" {
+			cprintln!(" <g!><s>SUCCESS!");
+			let enabled = extensions.enableExtension(EXT_UUID).await?;
+
+			if !enabled {
+				return Err(anyhow!(cformat!("Failed to enable GNOME Shell extension \"<y!><s>{}</></>\". Please check that it's installed and loaded.", EXT_UUID)));
+			}
+		} else if result == "cancelled" {
+			cprintln!(" <y><s>CANCELLED!");
+			return Ok(());
+		} else {
+			cprintln!(" <r!><s>FAILED!");
+			return Err(anyhow!(cformat!("Failed to enable GNOME Shell extension \"<y!><s>{}</></>\". Please check that it's installed and loaded.", EXT_UUID)));
+		}
 	}
 
 	wait_for_exit().await;
@@ -87,5 +95,5 @@ fn get_extensions_dir() -> Result<PathBuf> {
 trait ShellExtensions {
 	async fn enableExtension(&self, uuid: &str) -> zbus::Result<bool>;
 	async fn disableExtension(&self, uuid: &str) -> zbus::Result<bool>;
-	//async fn installRemoteExtension(&self, uuid: &str) -> zbus::Result<String>;
+	async fn installRemoteExtension(&self, uuid: &str) -> zbus::Result<String>;
 }

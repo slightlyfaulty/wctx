@@ -43,6 +43,7 @@ export default class WctxExtension extends Extension {
 	dbus = null
 	windows = null
 	signals = new Map()
+	timeout = null
 
 	enable() {
 		Gio.DBusProxy.new_for_bus(
@@ -72,9 +73,14 @@ export default class WctxExtension extends Extension {
 			}
 		}
 
+		if (this.timeout) {
+			clearTimeout(this.timeout)
+		}
+
 		this.dbus = null
 		this.windows = null
 		this.signals.clear()
+		this.timeout = null
 	}
 
 	connectSignal(object, signal, callback) {
@@ -106,19 +112,17 @@ export default class WctxExtension extends Extension {
 			}
 		}
 
-		const display = global.display
-
 		this.connectSignal(global.window_manager, 'map', (wm, actor) => {
 			this.watchWindow(actor.meta_window, actor)
 		})
 
-		this.connectSignal(display, 'focus-window', (display, meta) => {
+		this.connectSignal(global.display, 'focus-window', (display, meta) => {
 			if (meta && meta.get_wm_class()) {
 				this.setWindow('active', meta)
 			}
 		})
 
-		this.connectSignal(display, 'window-entered-monitor', (display, monitor, meta) => {
+		this.connectSignal(global.display, 'window-entered-monitor', (display, monitor, meta) => {
 			this.updateWindow(meta, 'display', monitor.toString())
 		})
 	}
@@ -192,7 +196,11 @@ export default class WctxExtension extends Extension {
 		this.windows[context] = meta ? this.getWindowData(meta) : {}
 
 		if (context === 'pointer' && !this.windows[context].meta) {
-			setTimeout(() => {
+			if (this.timeout) {
+				clearTimeout(this.timeout)
+			}
+
+			this.timeout = setTimeout(() => {
 				if (!this.windows[context].meta) {
 					this.sendWindow(context)
 				}
