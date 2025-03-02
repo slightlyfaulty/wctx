@@ -52,7 +52,7 @@ impl<T: Send + 'static> Debouncer<T> {
                         }
                     }
 				}
-				
+
 				// Send out the most recent value.
 				// (We ignore errors here because it just means no one is awaiting.)
 				let _ = output_tx.send(last);

@@ -17,7 +17,23 @@ pub enum WindowContext {
 	Pointer,
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, strum::Display, strum::EnumString, strum::VariantNames)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize, Type, clap::ValueEnum, strum::Display, strum::AsRefStr)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+#[zvariant(signature = "s")]
+pub enum WindowProp {
+	ID,
+	Name,
+	Class,
+	PID,
+	Title,
+	Type,
+	Role,
+	State,
+	Display,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, strum::EnumString, strum::Display, strum::AsRefStr, strum::VariantNames)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
 pub enum WindowType {
@@ -43,7 +59,7 @@ pub enum WindowType {
 	Override, // GNOME non-standard
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, strum::Display, strum::EnumString, strum::VariantNames)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, strum::EnumString, strum::Display, strum::AsRefStr, strum::VariantNames)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
 pub enum WindowState {
@@ -70,18 +86,6 @@ pub struct WindowDict {
 }
 
 impl WindowDict {
-	const FIELDS: &'static [&'static str] = &[
-		"id",
-		"name",
-		"class",
-		"pid",
-		"title",
-		"type",
-		"role",
-		"state",
-		"display",
-	];
-	
 	pub fn new(
 		id: &str,
 		name: &str,
@@ -120,20 +124,17 @@ impl WindowDict {
 		])
 	}
 
-	pub fn update(&mut self, key: &str, value: &str) -> fdo::Result<()> {
+	pub fn update(&mut self, key: WindowProp, value: &str) -> fdo::Result<()> {
 		match key {
-			"id" => self.id = value.into(),
-			"name" => self.name = value.into(),
-			"class" => self.class = value.into(),
-			"pid" => self.pid = parse_int_string(value).map_err(|_| fdo::Error::InvalidArgs(format!("Expected integer value for `{}`", key)))?,
-			"title" => self.title = value.into(),
-			"type" => self.r#type = WindowType::from_str(value).map_err(|_| fdo::Error::InvalidArgs(format!("Expected valid value for `{}` (\"\"{})", key, WindowType::VARIANTS.join(", "))))?,
-			"role" => self.role = value.into(),
-			"state" => self.state = WindowState::from_str(value).map_err(|_| fdo::Error::InvalidArgs(format!("Expected valid value for `{}` (\"\"{})", key, WindowState::VARIANTS.join(", "))))?,
-			"display" => self.display = value.into(),
-			_ => {
-				return Err(fdo::Error::InvalidArgs(format!("Key must be one of: {}", Self::FIELDS.join(", "))));
-			}
+			WindowProp::ID => self.id = value.into(),
+			WindowProp::Name => self.name = value.into(),
+			WindowProp::Class => self.class = value.into(),
+			WindowProp::PID => self.pid = parse_int_string(value).map_err(|_| fdo::Error::InvalidArgs(format!("Expected integer value for `{}`", key)))?,
+			WindowProp::Title => self.title = value.into(),
+			WindowProp::Type => self.r#type = WindowType::from_str(value).map_err(|_| fdo::Error::InvalidArgs(format!("Expected valid value for `{}` (\"\"{})", key, WindowType::VARIANTS.join(", "))))?,
+			WindowProp::Role => self.role = value.into(),
+			WindowProp::State => self.state = WindowState::from_str(value).map_err(|_| fdo::Error::InvalidArgs(format!("Expected valid value for `{}` (\"\"{})", key, WindowState::VARIANTS.join(", "))))?,
+			WindowProp::Display => self.display = value.into(),
 		}
 
 		Ok(())
@@ -214,6 +215,14 @@ impl ValueExt<u32> for DictMap<'_> {
 			},
 			None => Ok(u32::default()),
 		}
+	}
+}
+
+fn parse_int_string(value: &str) -> Result<u32, ParseIntError> {
+	if value == "" {
+		Ok(0)
+	} else {
+		value.parse::<u32>()
 	}
 }
 

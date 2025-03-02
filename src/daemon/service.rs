@@ -92,7 +92,7 @@ impl Windows {
 	async fn update_window(
 		&mut self,
 		context: WindowContext,
-		key: &str,
+		key: WindowProp,
 		value: &str,
 		#[zbus(signal_emitter)]
 		emitter: SignalEmitter<'_>
@@ -122,7 +122,7 @@ pub async fn serve(tx: Sender<ServiceProxy<'_>>) -> Result<()> {
 	let application = Application {
 		status: Default::default(),
 	};
-	
+
 	let windows = Windows {
 		active_window: WindowDict::default(),
 		pointer_window: WindowDict::default(),
@@ -132,7 +132,11 @@ pub async fn serve(tx: Sender<ServiceProxy<'_>>) -> Result<()> {
 		.name("org.wctx")?
 		.serve_at("/", application)?
 		.serve_at("/", windows)?
-		.build().await?;
+		.build().await
+		.map_err(|err| match err {
+			zbus::Error::NameTaken => anyhow!("The daemon service is already running"),
+			_ => err.into(),
+		})?;
 
 	let service = ServiceProxy {
 		application: ApplicationProxy::new(&connection).await?,

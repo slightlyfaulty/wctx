@@ -15,7 +15,7 @@ pub struct Args {
 	context: Option<QueryContext>,
 
 	/// Query a single property value
-	property: Option<QueryProperty>,
+	property: Option<WindowProp>,
 
 	/// Output format
 	#[arg(short, long, value_enum, default_value_t = QueryFormat::default())]
@@ -43,23 +43,9 @@ pub enum QueryFormat {
 	CSV,
 }
 
-#[derive(Copy, Clone, Debug, clap::ValueEnum, strum::Display)]
-#[strum(serialize_all = "lowercase")]
-pub enum QueryProperty {
-	ID,
-	Name,
-	Class,
-	PID,
-	Title,
-	Type,
-	Role,
-	State,
-	Display,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum WindowProperty<'a> {
+enum QueryProp<'a> {
 	ID(&'a str),
 	Name(&'a str),
 	Class(&'a str),
@@ -71,7 +57,7 @@ enum WindowProperty<'a> {
 	Display(&'a str),
 }
 
-impl Display for WindowProperty<'_> {
+impl Display for QueryProp<'_> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Self::ID(v) => write!(f, "{}", v),
@@ -88,24 +74,24 @@ impl Display for WindowProperty<'_> {
 }
 
 impl WindowDict {
-	fn prop(&self, prop: QueryProperty) -> WindowProperty {
+	fn prop(&self, prop: WindowProp) -> QueryProp {
 		match prop {
-			QueryProperty::ID => WindowProperty::ID(&self.id),
-			QueryProperty::Name => WindowProperty::Name(&self.name),
-			QueryProperty::Class => WindowProperty::Class(&self.class),
-			QueryProperty::PID => WindowProperty::PID(self.pid),
-			QueryProperty::Title => WindowProperty::Title(&self.title),
-			QueryProperty::Type => WindowProperty::Type(self.r#type),
-			QueryProperty::Role => WindowProperty::Role(&self.role),
-			QueryProperty::State => WindowProperty::State(self.state),
-			QueryProperty::Display => WindowProperty::Display(&self.display),
+			WindowProp::ID => QueryProp::ID(&self.id),
+			WindowProp::Name => QueryProp::Name(&self.name),
+			WindowProp::Class => QueryProp::Class(&self.class),
+			WindowProp::PID => QueryProp::PID(self.pid),
+			WindowProp::Title => QueryProp::Title(&self.title),
+			WindowProp::Type => QueryProp::Type(self.r#type),
+			WindowProp::Role => QueryProp::Role(&self.role),
+			WindowProp::State => QueryProp::State(self.state),
+			WindowProp::Display => QueryProp::Display(&self.display),
 		}
 	}
 }
 
 struct Printer {
 	window: Option<WindowDict>,
-	property: Option<QueryProperty>,
+	property: Option<WindowProp>,
 	format: QueryFormat,
 	output: String,
 	linebreak: bool,
@@ -113,7 +99,7 @@ struct Printer {
 }
 
 impl Printer {
-	fn new(property: Option<QueryProperty>, format: QueryFormat, watch: bool) -> Self {
+	fn new(property: Option<WindowProp>, format: QueryFormat, watch: bool) -> Self {
 		let linebreak = if property.is_some() {
 			!matches!(format, QueryFormat::TOML | QueryFormat::CSV)
 		} else {
@@ -159,8 +145,8 @@ impl Printer {
 	}
 
 	fn format(&self, window: &WindowDict) -> Result<String> {
-		if let Some(qp) = self.property {
-			let prop = window.prop(qp);
+		if let Some(key) = self.property {
+			let prop = window.prop(key);
 
 			match self.format {
 				QueryFormat::Flat => {
@@ -180,10 +166,10 @@ impl Printer {
 				QueryFormat::CSV => {
 					let mut wtr = csv::WriterBuilder::new()
 						.has_headers(false)
-						.from_writer(vec![]);
+						.from_writer(Vec::new());
 
 					if self.first {
-						wtr.serialize(qp.to_string())?;
+						wtr.serialize(key)?;
 					}
 
 					wtr.serialize(prop)?;
