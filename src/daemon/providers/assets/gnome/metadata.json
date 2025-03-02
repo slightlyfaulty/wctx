@@ -1,8 +1,8 @@
 {
   "name": "Window Context (wctx)",
-  "description": "Helper extension for wctx to receive window information. Leave this extension disabled, it will be enabled by wctx as needed.",
+  "description": "Helper extension for wctx to receive window information from GNOME.",
   "uuid": "wctx@slightlyfaulty.github.io",
-  "version-name": "1.0.1",
+  "version-name": "1.0.2",
   "shell-version": ["45", "46", "47"],
   "url": "https://github.com/slightlyfaulty/wctx"
 }
