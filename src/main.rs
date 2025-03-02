@@ -1,3 +1,4 @@
+#[macro_use]
 mod types;
 mod daemon;
 mod query;

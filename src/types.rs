@@ -240,10 +240,12 @@ macro_rules! impl_from_str_enum {
 impl_from_str_enum!(WindowType);
 impl_from_str_enum!(WindowState);
 
-fn parse_int_string(value: &str) -> Result<u32, ParseIntError> {
-	if value == "" {
-		Ok(0)
-	} else {
-		value.parse::<u32>()
-	}
+macro_rules! concurrent {
+    ($(let $var:ident = $expr:expr),* $(,)?) => {
+        let (
+            $($var),*
+        ) = tokio::join!(
+            $($expr),*
+        );
+    };
 }

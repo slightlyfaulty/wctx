@@ -6,7 +6,7 @@ use anyhow::Result;
 use tokio::time::Duration;
 use x11rb_async::connection::Connection;
 use x11rb_async::rust_connection::RustConnection;
-use x11rb_async::protocol::{xproto::*, Event, randr::*};
+use x11rb_async::protocol::{Event, xproto::*, randr::*};
 use x11rb_async::protocol::randr::ConnectionExt as _;
 
 pub fn detect() -> Option<WindowProvider> {
@@ -37,12 +37,15 @@ pub async fn serve(service: &ServiceProxy<'_>) -> Result<()> {
 	x.conn.flush().await?;
 
 	// determine initial windows
-	let mut active_window = x.get_active_window().await.unwrap_or_default();
-	let mut pointer_window = x.get_pointer_window().await.unwrap_or_default();
+	if let Some(active_window) = x.query_active_window().await {
+		x.set_window(WindowContext::Active, active_window).await?;
+	}
 
-	if active_window.id > 0 { x.send_window(WindowContext::Active, &active_window).await? }
-	if pointer_window.id > 0 { x.send_window(WindowContext::Pointer, &pointer_window).await? }
+	if let Some(pointer_window) = x.query_pointer_window().await {
+		x.set_window(WindowContext::Pointer, pointer_window).await?;
+	}
 
+	// debouncers for window move events
 	let mut active_move_debouncer = Debouncer::new(Duration::from_millis(15));
 	let mut pointer_move_debouncer = Debouncer::new(Duration::from_millis(15));
 
@@ -60,157 +63,115 @@ pub async fn serve(service: &ServiceProxy<'_>) -> Result<()> {
 						}
 					},
 					Event::FocusIn(e) => {
-						if e.detail != NotifyDetail::NONLINEAR_VIRTUAL || e.mode != NotifyMode::NORMAL {
+						if e.mode != NotifyMode::NORMAL || e.detail != NotifyDetail::NONLINEAR_VIRTUAL {
 							continue;
 						}
 
-						if e.event == active_window.id || e.event == active_window.top_id {
+						if e.event == x.active_window.id || e.event == x.active_window.top_id {
 							continue;
 						}
 
-						if e.event == pointer_window.id || e.event == pointer_window.top_id {
-							active_window = pointer_window.clone();
-						} else {
-							let win_match = x.resolve_window_match(e.event).await;
-
-							let Some(win_match) = win_match else {
-								continue;
-							};
-
-							if win_match.0 == active_window.id {
-								continue;
-							}
-
-							active_window = x.get_window(e.event, win_match).await;
-						}
-
-						x.send_window(WindowContext::Active, &active_window).await?;
-					},
-					Event::EnterNotify(e) => {
-						if e.event == pointer_window.id || e.event == pointer_window.top_id || e.child == pointer_window.id {
-							continue;
-						}
-
-						if e.event == active_window.id || e.event == active_window.top_id {
-							pointer_window = active_window.clone();
-							pointer_window.display = x.get_window_display(pointer_window.id).await.unwrap_or_default();
+						let window = if e.event == x.pointer_window.id || e.event == x.pointer_window.top_id {
+							x.pointer_window.clone()
 						} else {
 							let Some(win_match) = x.resolve_window_match(e.event).await else {
 								continue;
 							};
 
-							if win_match.0 == pointer_window.id {
+							if win_match.0 == x.active_window.id {
 								continue;
 							}
 
-							pointer_window = x.get_window(e.event, win_match).await;
+							x.get_window(e.event, win_match).await
+						};
+
+						x.set_window(WindowContext::Active, window).await?;
+					},
+					Event::EnterNotify(e) => {
+						if e.event == x.pointer_window.id || e.event == x.pointer_window.top_id || e.child == x.pointer_window.id {
+							continue;
 						}
 
-						x.send_window(WindowContext::Pointer, &pointer_window).await?;
+						let window = if e.event == x.active_window.id || e.event == x.active_window.top_id {
+							let mut window = x.active_window.clone();
+							// need to recalculate display when moving window under mouse (e.g. with keyboard)
+							// from another display, because active window display won't be updated just yet
+							window.display = x.get_window_display(window.id).await.unwrap_or_default();
+							window
+						} else {
+							let Some(win_match) = x.resolve_window_match(e.event).await else {
+								continue;
+							};
+
+							if win_match.0 == x.pointer_window.id {
+								continue;
+							}
+
+							x.get_window(e.event, win_match).await
+						};
+
+						x.set_window(WindowContext::Pointer, window).await?;
 					},
 					Event::PropertyNotify(e) => {
-						if e.window != active_window.id && e.window != pointer_window.id {
+						if e.window != x.active_window.id && e.window != x.pointer_window.id {
 							continue;
 						}
 
 						if e.atom == x.atoms.WM_NAME {
 							let new_title = x.get_window_title(e.window).await.unwrap_or_default();
 
-							if e.window == active_window.id && new_title != active_window.title {
-								if active_window.id == pointer_window.id {
-									active_window.title = new_title.clone();
-									pointer_window.title = new_title;
-									x.update_window(WindowContext::Both, "title", &active_window.title).await?;
-								} else {
-									active_window.title = new_title;
-									x.update_window(WindowContext::Active, "title", &active_window.title).await?;
-								}
-							}
-							else if e.window == pointer_window.id && new_title != pointer_window.title {
-								pointer_window.title = new_title;
-								x.update_window(WindowContext::Pointer, "title", &pointer_window.title).await?;
-							}
-						} else if e.atom == x.atoms.WM_WINDOW_ROLE {
-							let new_role = x.get_window_role(e.window).await.unwrap_or_default();
-
-							if e.window == active_window.id && new_role != active_window.role {
-								if active_window.id == pointer_window.id {
-									active_window.role = new_role.clone();
-									pointer_window.role = new_role;
-									x.update_window(WindowContext::Both, "role", &active_window.role).await?;
-								} else {
-									active_window.role = new_role;
-									x.update_window(WindowContext::Active, "role", &active_window.role).await?;
-								}
-							}
-							else if e.window == pointer_window.id && new_role != pointer_window.role {
-								pointer_window.role = new_role;
-								x.update_window(WindowContext::Pointer, "role", &pointer_window.role).await?;
+							if e.window == x.active_window.id && new_title != x.active_window.title {
+								x.update_window(WindowContext::Active, XUpdateProp::Title(new_title)).await?;
+							} else if e.window == x.pointer_window.id && new_title != x.pointer_window.title {
+								x.update_window(WindowContext::Pointer, XUpdateProp::Title(new_title)).await?;
 							}
 						} else if e.atom == x.atoms.WM_STATE {
 							let new_state = x.get_window_state(e.window).await.unwrap_or_default();
 
-							if e.window == active_window.id && new_state != active_window.state {
-								if active_window.id == pointer_window.id {
-									active_window.state = new_state.clone();
-									pointer_window.state = new_state;
-									x.update_window(WindowContext::Both, "state", &active_window.state.to_string()).await?;
-								} else {
-									active_window.state = new_state;
-									x.update_window(WindowContext::Active, "state", &active_window.state.to_string()).await?;
-								}
-							}
-							else if e.window == pointer_window.id && new_state != pointer_window.state {
-								pointer_window.state = new_state;
-								x.update_window(WindowContext::Pointer, "state", &pointer_window.state.to_string()).await?;
+							if e.window == x.active_window.id && new_state != x.active_window.state {
+								x.update_window(WindowContext::Active, XUpdateProp::State(new_state)).await?;
+							} else if e.window == x.pointer_window.id && new_state != x.pointer_window.state {
+								x.update_window(WindowContext::Pointer, XUpdateProp::State(new_state)).await?;
 							}
 						}
 					},
+					Event::RandrNotify(_) | Event::RandrScreenChangeNotify(_) => {
+						x.displays = get_displays(&x.conn, x.root).await?;
+					}
 					Event::ConfigureNotify(e) => {
 						if e.override_redirect {
 							continue;
 						}
 
-						if e.window == active_window.top_id {
+						if e.window == x.active_window.top_id {
 							active_move_debouncer.push(e);
-						} else if e.window == pointer_window.top_id {
+						} else if e.window == x.pointer_window.top_id {
 							pointer_move_debouncer.push(e);
 						}
-					}
-					Event::RandrNotify(_) | Event::RandrScreenChangeNotify(_) => {
-						x.displays = get_displays(&x.conn, x.root).await?;
 					}
 					_ => {}
 				}
 			}
 			Some(e) = active_move_debouncer.next() => {
-				if e.window != active_window.top_id {
+				if e.window != x.active_window.top_id {
 					continue;
 				}
 
 				let new_display = x.calc_window_display(e.x, e.y, e.width, e.height).unwrap_or_default();
 
-				if new_display != active_window.display {
-					if pointer_window.id == active_window.id {
-						active_window.display = new_display;
-						pointer_window.display = active_window.display.clone();
-						x.send_window(WindowContext::Both, &pointer_window).await?;
-					} else {
-						active_window.display = new_display;
-						x.send_window(WindowContext::Active, &active_window).await?;
-					}
+				if new_display != x.active_window.display {
+					x.update_window(WindowContext::Active, XUpdateProp::Display(new_display)).await?;
 				}
 			}
 			Some(e) = pointer_move_debouncer.next() => {
-				if e.window != pointer_window.top_id {
+				if e.window != x.pointer_window.top_id {
 					continue;
 				}
 
 				let new_display = x.calc_window_display(e.x, e.y, e.width, e.height).unwrap_or_default();
 
-				if new_display != pointer_window.display {
-					pointer_window.display = new_display;
-					x.send_window(WindowContext::Pointer, &pointer_window).await?;
+				if new_display != x.pointer_window.display {
+					x.update_window(WindowContext::Pointer, XUpdateProp::Display(new_display)).await?;
 				}
 			}
 		}
@@ -240,9 +201,12 @@ async fn get_displays(conn: &RustConnection, root: Window) -> Result<Vec<XDispla
 struct X11<'a> {
 	conn: RustConnection,
 	root: Window,
-	atoms: Atoms,
-	displays: Vec<XDisplay>,
 	service: &'a ServiceProxy<'a>,
+	atoms: Atoms,
+	window_types: HashMap<Atom, WindowType>,
+	displays: Vec<XDisplay>,
+	active_window: XWindow,
+	pointer_window: XWindow,
 }
 
 impl<'a> X11<'a> {
@@ -257,26 +221,59 @@ impl<'a> X11<'a> {
 			}
 		});
 
-		let displays = get_displays(&conn, root).await?;
-		let atoms = Atoms::load(&conn).await?;
+		concurrent!(
+			let atoms = Atoms::load(&conn),
+			let window_types = Atoms::load_window_types(&conn),
+			let displays = get_displays(&conn, root),
+		);
 
 		Ok(X11 {
 			conn,
 			root,
-			atoms,
-			displays,
 			service,
+			atoms: atoms?,
+			window_types: window_types?,
+			displays: displays?,
+			active_window: XWindow::default(),
+			pointer_window: XWindow::default(),
 		})
 	}
 
-	async fn send_window(&self, context: WindowContext, window: &XWindow) -> Result<()> {
-		self.service.windows.set_window(context, window.as_map()).await
-			.map_err(|err| err.into())
+	async fn set_window(&mut self, context: WindowContext, window: XWindow) -> Result<()> {
+		let window = match context {
+			WindowContext::Active => {
+				self.active_window = window;
+				&self.active_window
+			},
+			WindowContext::Pointer => {
+				self.pointer_window = window;
+				&self.pointer_window
+			},
+			WindowContext::Both => {
+				self.active_window = window.clone();
+				self.pointer_window = window;
+				&self.active_window
+			}
+		};
+
+		self.service.windows.set_window(context, window.as_map()).await.map_err(Into::into)
 	}
 
-	async fn update_window(&self, context: WindowContext, key: &str, value: &str) -> Result<()> {
-		self.service.windows.update_window(context, key, value).await
-			.map_err(|err| err.into())
+	async fn update_window(&mut self, mut context: WindowContext, prop: XUpdateProp) -> Result<()> {
+		if context == WindowContext::Active && self.active_window.id == self.pointer_window.id {
+			context = WindowContext::Both;
+		}
+
+		let (key, value) = match context {
+			WindowContext::Active => self.active_window.update(prop),
+			WindowContext::Pointer => self.pointer_window.update(prop),
+			WindowContext::Both => {
+				self.active_window.update(prop.clone());
+				self.pointer_window.update(prop)
+			},
+		};
+
+		self.service.windows.update_window(context, key, value).await.map_err(Into::into)
 	}
 
 	async fn get_window(&self, top_id: Window, win_match: PartialMatch) -> XWindow {
@@ -285,17 +282,29 @@ impl<'a> X11<'a> {
 		}
 
 		let id = win_match.0;
-		let pid = self.get_window_pid(id).await.unwrap_or_default();
-		let title = self.get_window_title(id).await.unwrap_or_default();
-		let r#type = self.get_window_type(id).await.unwrap_or_default();
-		let role = self.get_window_role(id).await.unwrap_or_default();
-		let state = self.get_window_state(id).await.unwrap_or_default();
-		let display = self.get_window_display(id).await.unwrap_or_default();
 
-		XWindow::new(win_match, top_id, pid, title, r#type, role, state, display)
+		concurrent!(
+			let pid = self.get_window_pid(id),
+			let title = self.get_window_title(id),
+			let r#type = self.get_window_type(id),
+			let role = self.get_window_role(id),
+			let state = self.get_window_state(id),
+			let display = self.get_window_display(id),
+		);
+
+		XWindow::new(
+			win_match,
+			top_id,
+			pid.unwrap_or_default(),
+			title.unwrap_or_default(),
+			r#type.unwrap_or_default(),
+			role.unwrap_or_default(),
+			state.unwrap_or_default(),
+			display.unwrap_or_default(),
+		)
 	}
 
-	async fn get_active_window(&self) -> Option<XWindow> {
+	async fn query_active_window(&self) -> Option<XWindow> {
 		let win_id = self.get_window_prop(self.root, self.atoms.ACTIVE_WINDOW, AtomEnum::WINDOW).await?.value32()?.next()?;
 
 		if win_id == 0 {
@@ -308,7 +317,7 @@ impl<'a> X11<'a> {
 		Some(window)
 	}
 
-	async fn get_pointer_window(&self) -> Option<XWindow> {
+	async fn query_pointer_window(&self) -> Option<XWindow> {
 		let win_id = self.conn.query_pointer(self.root).await.ok()?.reply().await.ok()?.child;
 
 		if win_id == 0 {
@@ -321,25 +330,25 @@ impl<'a> X11<'a> {
 		Some(window)
 	}
 
-	async fn cascade_event_mask(&self, win_id: Window, event_mask: &ChangeWindowAttributesAux) -> Result<()> {
+	async fn cascade_event_mask(&self, win_id: Window, event_mask: &ChangeWindowAttributesAux) -> Result<bool> {
 		if win_id == 0 {
-			return Ok(());
+			return Ok(false);
 		}
 
 		self.conn.change_window_attributes(win_id, &event_mask).await?;
 
-		// if window has a valid class we shouldn't cascade any further as we may get events for meta/proxy windows that we don't want events for
-		if let Some(reply) = self.get_window_prop(win_id, AtomEnum::WM_CLASS, AtomEnum::STRING).await {
-			if reply.value_len > 0 {
-				return Ok(());
-			}
+		// if window is valid we shouldn't cascade any further as we may get events for meta/proxy windows that we don't want
+		if self.is_valid_window(win_id).await {
+			return Ok(true);
 		}
 
 		for child_id in self.conn.query_tree(win_id).await?.reply().await?.children {
-			Box::pin(self.cascade_event_mask(child_id, &event_mask)).await?;
+			if Box::pin(self.cascade_event_mask(child_id, &event_mask)).await? {
+				return Ok(true);
+			}
 		}
 
-		Ok(())
+		Ok(false)
 	}
 
 	async fn resolve_window_match(&self, win_id: Window) -> Option<PartialMatch> {
@@ -391,7 +400,10 @@ impl<'a> X11<'a> {
 	}
 
 	async fn get_window_prop<A, B>(&self, win_id: Window, atom_prop: A, atom_type: B) -> Option<GetPropertyReply>
-	where A: Into<Atom> + Send + 'static, B: Into<Atom> + Send + 'static {
+	where
+		A: Into<Atom> + Send + 'static,
+		B: Into<Atom> + Send + 'static,
+	{
 		let reply = self.conn.get_property(false, win_id, atom_prop, atom_type, 0, 1024).await.ok()?.reply().await.ok()?;
 
 		if reply.value_len == 0 {
@@ -399,6 +411,16 @@ impl<'a> X11<'a> {
 		}
 
 		Some(reply)
+	}
+
+	async fn is_valid_window(&self, win_id: Window) -> bool {
+		if let Some(reply) = self.get_window_prop(win_id, AtomEnum::WM_CLASS, AtomEnum::STRING).await {
+			if reply.value_len > 0 {
+				return true;
+			}
+		}
+
+		false
 	}
 
 	async fn get_window_pid(&self, win_id: Window) -> Option<u32> {
@@ -412,7 +434,7 @@ impl<'a> X11<'a> {
 		let result = self.get_window_prop(win_id, self.atoms.WM_NAME, self.atoms.UTF8_STRING).await;
 
 		/*if result.is_none() {
-			result = get_window_prop(x.conn, win, AtomEnum::WM_NAME, AtomEnum::STRING).await;
+			result = self.get_window_prop(win_id, AtomEnum::WM_NAME, AtomEnum::STRING).await;
 		}*/
 
 		Some(std::str::from_utf8(&result?.value).ok()?.into())
@@ -422,7 +444,7 @@ impl<'a> X11<'a> {
 		let reply = self.get_window_prop(win_id, self.atoms.WM_WINDOW_TYPE, AtomEnum::ATOM).await?;
 
 		let value = reply.value32()?.next()?;
-		let win_type = self.atoms.window_types.get(&value)?;
+		let win_type = self.window_types.get(&value)?;
 
 		Some(*win_type)
 	}
@@ -495,6 +517,14 @@ impl<'a> X11<'a> {
 }
 
 #[derive(Clone, Debug)]
+enum XUpdateProp {
+	Title(Box<str>),
+	State(WindowState),
+	Display(Box<str>),
+	// TODO: Are any other properties likely to change?
+}
+
+#[derive(Clone, Debug)]
 struct XWindow {
 	id: Window,
 	top_id: Window,
@@ -529,15 +559,23 @@ impl XWindow {
 	fn as_map(&self) -> DictMap {
 		WindowDict::new(
 			&self.id.to_string(),
-            &self.name,
-            &self.class,
-            self.pid,
-            &self.title,
-            self.r#type,
-            &self.role,
-            self.state,
-            &self.display
+			&self.name,
+			&self.class,
+			self.pid,
+			&self.title,
+			self.r#type,
+			&self.role,
+			self.state,
+			&self.display
 		).into()
+	}
+
+	fn update(&mut self, prop: XUpdateProp) -> (WindowProp, &str) {
+		match prop {
+			XUpdateProp::Title(value) => { self.title = value; (WindowProp::Title, &self.title) },
+			XUpdateProp::State(value) => { self.state = value; (WindowProp::State, self.state.as_ref()) },
+			XUpdateProp::Display(value) => { self.display = value; (WindowProp::Display, &self.display) },
+		}
 	}
 }
 
@@ -582,46 +620,76 @@ struct Atoms {
 	WM_STATE_FULLSCREEN: Atom,
 	WM_WINDOW_ROLE: Atom,
 	WM_WINDOW_TYPE: Atom,
-	window_types: HashMap<Atom, WindowType>,
 }
 
 impl Atoms {
-	async fn load(conn: &RustConnection) -> Result<Self> {
-		Ok(Self {
-			UTF8_STRING:             Self::get_atom(&conn, b"UTF8_STRING").await?,
-			ACTIVE_WINDOW:           Self::get_atom(&conn, b"_NET_ACTIVE_WINDOW").await?,
-			WM_NAME:                 Self::get_atom(&conn, b"_NET_WM_NAME").await?,
-			WM_PID:                  Self::get_atom(&conn, b"_NET_WM_PID").await?,
-			WM_STATE:                Self::get_atom(&conn, b"_NET_WM_STATE").await?,
-			WM_STATE_MAXIMIZED_HORZ: Self::get_atom(&conn, b"_NET_WM_STATE_MAXIMIZED_HORZ").await?,
-			WM_STATE_MAXIMIZED_VERT: Self::get_atom(&conn, b"_NET_WM_STATE_MAXIMIZED_VERT").await?,
-			WM_STATE_FULLSCREEN:     Self::get_atom(&conn, b"_NET_WM_STATE_FULLSCREEN").await?,
-			WM_WINDOW_ROLE:          Self::get_atom(&conn, b"WM_WINDOW_ROLE").await?,
-			WM_WINDOW_TYPE:          Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE").await?,
-			window_types:            Self::load_window_types(&conn).await?,
-		})
-	}
-
 	async fn get_atom(conn: &RustConnection, name: &[u8]) -> Result<Atom> {
 		Ok(conn.intern_atom(false, name).await?.reply().await?.atom)
 	}
 
+	#[allow(non_snake_case)]
+	async fn load(conn: &RustConnection) -> Result<Self> {
+		concurrent!(
+			let UTF8_STRING             = Self::get_atom(&conn, b"UTF8_STRING"),
+			let ACTIVE_WINDOW           = Self::get_atom(&conn, b"_NET_ACTIVE_WINDOW"),
+			let WM_NAME                 = Self::get_atom(&conn, b"_NET_WM_NAME"),
+			let WM_PID                  = Self::get_atom(&conn, b"_NET_WM_PID"),
+			let WM_STATE                = Self::get_atom(&conn, b"_NET_WM_STATE"),
+			let WM_STATE_MAXIMIZED_HORZ = Self::get_atom(&conn, b"_NET_WM_STATE_MAXIMIZED_HORZ"),
+			let WM_STATE_MAXIMIZED_VERT = Self::get_atom(&conn, b"_NET_WM_STATE_MAXIMIZED_VERT"),
+			let WM_STATE_FULLSCREEN     = Self::get_atom(&conn, b"_NET_WM_STATE_FULLSCREEN"),
+			let WM_WINDOW_ROLE          = Self::get_atom(&conn, b"WM_WINDOW_ROLE"),
+			let WM_WINDOW_TYPE          = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE"),
+		);
+
+		Ok(Self {
+			UTF8_STRING: UTF8_STRING?,
+			ACTIVE_WINDOW: ACTIVE_WINDOW?,
+			WM_NAME: WM_NAME?,
+			WM_PID: WM_PID?,
+			WM_STATE: WM_STATE?,
+			WM_STATE_MAXIMIZED_HORZ: WM_STATE_MAXIMIZED_HORZ?,
+			WM_STATE_MAXIMIZED_VERT: WM_STATE_MAXIMIZED_VERT?,
+			WM_STATE_FULLSCREEN: WM_STATE_FULLSCREEN?,
+			WM_WINDOW_ROLE: WM_WINDOW_ROLE?,
+			WM_WINDOW_TYPE: WM_WINDOW_TYPE?,
+		})
+	}
+
+	#[allow(non_snake_case)]
 	async fn load_window_types(conn: &RustConnection) -> Result<HashMap<u32, WindowType>> {
+		concurrent!(
+			let COMBO         = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_COMBO"),
+			let DESKTOP       = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_DESKTOP"),
+			let DIALOG        = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_DIALOG"),
+			let DND           = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_DND"),
+			let DOCK          = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_DOCK"),
+			let DROPDOWN_MENU = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_DROPDOWN_MENU"),
+			let MENU          = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_MENU"),
+			let NORMAL        = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_NORMAL"),
+			let NOTIFICATION  = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_NOTIFICATION"),
+			let POPUP_MENU    = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_POPUP_MENU"),
+			let SPLASH        = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_SPLASH"),
+			let TOOLBAR       = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_TOOLBAR"),
+			let TOOLTIP       = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_TOOLTIP"),
+			let UTILITY       = Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_UTILITY"),
+		);
+
 		Ok(HashMap::from([
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE").await?,               WindowType::Combo),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_DESKTOP").await?,       WindowType::Desktop),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_DIALOG").await?,        WindowType::Dialog),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_DND").await?,           WindowType::DND),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_DOCK").await?,          WindowType::Dock),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_DROPDOWN_MENU").await?, WindowType::DropdownMenu),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_MENU").await?,          WindowType::Menu),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_NORMAL").await?,        WindowType::Normal),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_NOTIFICATION").await?,  WindowType::Notification),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_POPUP_MENU").await?,    WindowType::PopupMenu),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_SPLASH").await?,        WindowType::Splash),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_TOOLBAR").await?,       WindowType::Toolbar),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_TOOLTIP").await?,       WindowType::Tooltip),
-			(Self::get_atom(&conn, b"_NET_WM_WINDOW_TYPE_UTILITY").await?,       WindowType::Utility),
+			(COMBO?,         WindowType::Combo),
+			(DESKTOP?,       WindowType::Desktop),
+			(DIALOG?,        WindowType::Dialog),
+			(DND?,           WindowType::DND),
+			(DOCK?,          WindowType::Dock),
+			(DROPDOWN_MENU?, WindowType::DropdownMenu),
+			(MENU?,          WindowType::Menu),
+			(NORMAL?,        WindowType::Normal),
+			(NOTIFICATION?,  WindowType::Notification),
+			(POPUP_MENU?,    WindowType::PopupMenu),
+			(SPLASH?,        WindowType::Splash),
+			(TOOLBAR?,       WindowType::Toolbar),
+			(TOOLTIP?,       WindowType::Tooltip),
+			(UTILITY?,       WindowType::Utility),
 		]))
 	}
 }
