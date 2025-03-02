@@ -1,6 +1,6 @@
 # wctx
 
-A simple Linux CLI tool to provide real-time information about the current **active** window (focused window) or **pointer** window (under the mouse cursor) on Wayland and X11. Written in Rust.
+A simple Linux CLI tool and D-Bus service to provide real-time information about the current **active** window (focused window) or **pointer** window (under the mouse cursor) on Wayland and X11.
 
 `wctx` consists of two components:
 
@@ -12,6 +12,8 @@ A simple Linux CLI tool to provide real-time information about the current **act
 - X11
 - KDE 6
 - GNOME 45+
+
+See [issues](https://github.com/slightlyfaulty/wctx/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22desktop%20support%22) for status of support for other desktop environments.
 
 ## Installation
 
@@ -32,6 +34,7 @@ sh install.sh
 ```
 
 This will:
+
 1. Build the binary using cargo
 2. Install it to `/usr/bin/wctx`
 3. Install the systemd service file to `/usr/lib/systemd/user/wctx.service`
@@ -62,16 +65,19 @@ wctx <CONTEXT> [PROPERTY] [OPTIONS]
 ### Basic Commands
 
 Query active window information in JSON format:
+
 ```bash
 wctx active -f json
 ```
 
-Get a specific property of the pointer window:
+Query a specific property of the pointer window:
+
 ```bash
 wctx pointer title
 ```
 
 Monitor the pointer window:
+
 ```bash
 wctx pointer --watch
 ```
@@ -108,20 +114,25 @@ Use the `-f` or `--format` option to specify the output format:
 - `csv`
 
 Example:
+
 ```bash
-wctx active -f json
+wctx pointer -f dict
 ```
 
 ### Running the Daemon
 
-The daemon should typically be managed through systemd, but you can also run it manually:
+The daemon should typically be managed through systemd:
+
+```bash
+systemctl --user enable --now wctx
+```
+
+But you can also run it manually:
 
 ```bash
 wctx daemon
-```
 
-You can also specify the window provider instead of auto-detecting:
-```bash
+# or specify the window provider explicitly
 wctx daemon --provider kwin
 ```
 
