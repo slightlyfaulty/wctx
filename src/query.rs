@@ -1,7 +1,8 @@
 use crate::types::*;
 use std::fmt::Display;
+use std::io::{self, Write};
 use anyhow::{anyhow, Result};
-use color_print::*;
+use colored::Colorize;
 use colored_json::to_colored_json_auto;
 use futures_lite::stream::StreamExt;
 use serde::Serialize;
@@ -152,6 +153,7 @@ impl Printer {
 				println!("{}", self.output);
 			} else {
 				print!("{}", self.output);
+				io::stdout().flush().unwrap();
 			}
 		}
 	}
@@ -162,10 +164,10 @@ impl Printer {
 
 			match self.format {
 				QueryFormat::Flat => {
-					Ok(format!("{}", prop))
+					Ok(prop.to_string())
 				}
 				QueryFormat::Dict => {
-					Ok(cformat!("<b!>{}:</> {}", qp, prop))
+					Ok(format!("{} {prop}", format!("{key}:").bright_blue()))
 				}
 				QueryFormat::TOML => {
 					toml::to_string(&prop).map_err(|e| e.into())
@@ -191,30 +193,30 @@ impl Printer {
 		} else {
 			match self.format {
 				QueryFormat::Flat => {
-					Ok(cformat!("\
-						<b!>id:</> {}<k!>,</> \
-						<b!>name:</> {}<k!>,</> \
-						<b!>class:</> {}<k!>,</> \
-						<b!>pid:</> {}<k!>,</> \
-						<b!>title:</> {}<k!>,</> \
-						<b!>type:</> {}<k!>,</> \
-						<b!>role:</> {}<k!>,</> \
-						<b!>state:</> {}<k!>,</> \
-						<b!>display:</> {}\n\
-					", window.id, window.name, window.class, window.pid, window.title, window.r#type, window.role, window.state, window.display))
+					Ok([
+						format!("{} {}", "id:".bright_blue(), window.id),
+						format!("{} {}", "name:".bright_blue(), window.name),
+						format!("{} {}", "class:".bright_blue(), window.class),
+						format!("{} {}", "pid:".bright_blue(), window.pid),
+						format!("{} {}", "title:".bright_blue(), window.title),
+						format!("{} {}", "type:".bright_blue(), window.r#type),
+						format!("{} {}", "role:".bright_blue(), window.role),
+						format!("{} {}", "state:".bright_blue(), window.state),
+						format!("{} {}", "display:".bright_blue(), window.display),
+					].join(&", ".bright_black()) + "\n")
 				}
 				QueryFormat::Dict => {
-					Ok(cformat!("\
-						<b!>id:</> {}\n\
-						<b!>name:</> {}\n\
-						<b!>class:</> {}\n\
-						<b!>pid:</> {}\n\
-						<b!>title:</> {}\n\
-						<b!>type:</> {}\n\
-						<b!>role:</> {}\n\
-						<b!>state:</> {}\n\
-						<b!>display:</> {}\n\
-					", window.id, window.name, window.class, window.pid, window.title, window.r#type, window.role, window.state, window.display))
+					Ok([
+						format!("{} {}", "id:".bright_blue(), window.id),
+						format!("{} {}", "name:".bright_blue(), window.name),
+						format!("{} {}", "class:".bright_blue(), window.class),
+						format!("{} {}", "pid:".bright_blue(), window.pid),
+						format!("{} {}", "title:".bright_blue(), window.title),
+						format!("{} {}", "type:".bright_blue(), window.r#type),
+						format!("{} {}", "role:".bright_blue(), window.role),
+						format!("{} {}", "state:".bright_blue(), window.state),
+						format!("{} {}", "display:".bright_blue(), window.display),
+					].join("\n") + "\n")
 				}
 				QueryFormat::TOML => {
 					toml::to_string(window).map_err(|e| e.into())
@@ -263,13 +265,17 @@ trait Windows {
 pub async fn run(args: Args) -> Result<()> {
 	let connection = Connection::session().await?;
 	let application = ApplicationProxy::new(&connection).await?;
-	
+
 	let status = application.status().await.map_err(|_| {
-		anyhow!(cformat!("Couldn't connect to the wctx daemon. You might need to start it with \"<y!><s>systemctl --user start wctx</></>\" or manually run \"<y!><s>wctx daemon</></>\"."))
+		anyhow!(
+			"Couldn't connect to the wctx daemon. You might need to start it with \"{}\" or manually run \"{}\".",
+			"systemctl --user start wctx".bright_yellow().bold(),
+			"wctx daemon".bright_yellow().bold(),
+		)
 	})?;
 
 	if status != "" {
-		ceprintln!("<r!><s>Daemon:</></> {}", status);
+		eprintln!("{} {}", "Daemon:".bright_red().bold(), status);
 		std::process::exit(126); // command cannot execute
 	}
 

@@ -29,43 +29,42 @@ pub async fn serve(service: &ServiceProxy<'_>) -> Result<()> {
 		let ext_dir = get_extensions_dir()?.join(EXT_UUID);
 
 		if tokio::fs::try_exists(&ext_dir).await? {
-			return Err(anyhow!(cformat!("Failed to enable GNOME Shell extension \"<y!><s>{}</></>\". Please check that it's installed and loaded.", EXT_UUID)));
+			return Err(anyhow!("Failed to enable GNOME Shell extension \"{}\". Please check that it's installed and loaded.", EXT_UUID.bright_yellow().bold()));
 		}
 
-		cprint!("<y!>Installing GNOME Shell helper extension...");
+		print!("{}", "Installing GNOME Shell helper extension...".bright_yellow());
 		io::stdout().flush()?;
 
 		let result = extensions.installRemoteExtension(EXT_UUID).await;
 
 		if result.is_err() {
-			cprintln!(" <r!><s>FAILED!");
-			cprintln!("<y!>Unable to install from the GNOME Shell Extensions directory. Installing files directly...");
+			println!(" {}", "FAILED!".bright_red().bold());
+			println!("{}", "Unable to install from the GNOME Shell Extensions directory. Installing files directly...".bright_yellow());
 
 			tokio::fs::create_dir(&ext_dir).await?;
 			tokio::fs::write(ext_dir.join("extension.js"), EXT_FILES[0]).await?;
 			tokio::fs::write(ext_dir.join("metadata.json"), EXT_FILES[1]).await?;
 
-			cprintln!("<b!>Extension installed successfully! Please log out and log back in to activate it.");
-			service.application.set_status("The GNOME Shell helper extension was installed. Please log out and log back in to activate it.".into()).await?;
-			
+			println!("{}", "Extension installed successfully! Please log out and log back in to activate it.".bright_blue());
+			service.application.set_status("The GNOME Shell helper extension was installed. Please log out and log back in to activate it.").await?;
+
 			return Ok(());
 		}
 
 		let result = result?;
 
 		if result == "successful" {
-			cprintln!(" <g!><s>SUCCESS!");
-			let enabled = extensions.enableExtension(EXT_UUID).await?;
+			println!(" {}", "SUCCESS!".bright_green().bold());
 
-			if !enabled {
-				return Err(anyhow!(cformat!("Failed to enable GNOME Shell extension \"<y!><s>{}</></>\". Please check that it's installed and loaded.", EXT_UUID)));
+			if !extensions.enableExtension(EXT_UUID).await? {
+				return Err(anyhow!("Failed to enable GNOME Shell extension \"{}\". Please check that it's installed and loaded.", EXT_UUID.bright_yellow().bold()));
 			}
 		} else if result == "cancelled" {
-			cprintln!(" <y><s>CANCELLED!");
+			println!(" {}", "CANCELLED!".yellow().bold());
 			return Ok(());
 		} else {
-			cprintln!(" <r!><s>FAILED!");
-			return Err(anyhow!(cformat!("Failed to enable GNOME Shell extension \"<y!><s>{}</></>\". Please check that it's installed and loaded.", EXT_UUID)));
+			println!(" {}", "FAILED!".bright_red().bold());
+			return Err(anyhow!("Failed to enable GNOME Shell extension \"{}\". Please check that it's installed and loaded.", EXT_UUID.bright_yellow().bold()));
 		}
 	}
 

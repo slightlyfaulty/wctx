@@ -1,7 +1,7 @@
 use crate::types::*;
 use std::future;
 use anyhow::{anyhow, Result};
-use color_print::*;
+use colored::Colorize;
 use tokio::sync::oneshot::Sender;
 use zbus::{connection, interface, fdo, object_server::SignalEmitter};
 
@@ -140,7 +140,7 @@ pub async fn serve(tx: Sender<ServiceProxy<'_>>) -> Result<()> {
 	};
 
 	if tx.send(service).is_ok() {
-		cprintln!("<g>D-Bus service started...");
+		println!("{}", "D-Bus service started...".green());
 	} else {
 		return Err(anyhow!("Failed to sync D-Bus service with provider thread"));
 	}

@@ -3,7 +3,7 @@ mod daemon;
 mod query;
 
 use clap::Parser;
-use color_print::*;
+use colored::Colorize;
 
 #[derive(clap::Parser)]
 #[command(version, about, long_about = None, args_conflicts_with_subcommands = true, disable_help_subcommand = true, flatten_help = true)]
@@ -33,7 +33,7 @@ async fn main() {
 	};
 
 	if let Err(err) = result {
-		ceprintln!("<r!><s>Error:</></> {}", err);
+		eprintln!("{} {}", "Error:".bright_red().bold(), err);
 		std::process::exit(1); // general error
 	}
 }
