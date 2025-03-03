@@ -1,0 +1,70 @@
+name: Update AUR Package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to use for the AUR package (without v prefix)'
+        required: true
+        default: ''
+      commit_message:
+        description: 'Custom commit message (leave blank to use version number)'
+        required: false
+        default: ''
+
+jobs:
+  update-aur-package:
+    runs-on: ubuntu-latest
+
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Get release version
+        id: get_version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          fi
+
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm git openssh pacman-contrib
+
+      - name: Install SSH key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          known_hosts: ${{ secrets.AUR_KNOWN_HOSTS }}
+
+      - name: Clone AUR package
+        run: git clone ssh://aur@aur.archlinux.org/wctx.git aur-repo
+
+      - name: Update PKGBUILD
+        working-directory: aur-repo
+        run: |
+          useradd -m builder
+          chown -R builder:builder .
+          sed -i "s/pkgver=.*/pkgver=${VERSION#v}/" PKGBUILD
+          sudo -u builder updpkgsums
+          sudo -u builder sh -c "makepkg --printsrcinfo > .SRCINFO"
+
+      - name: Commit and push changes
+        working-directory: aur-repo
+        run: |
+          chown -R root:root .
+          git config user.name "Saul Fautley"
+          git config user.email "saulfautley@gmail.com"
+          git add PKGBUILD .SRCINFO
+          
+          if [[ -n "${{ github.event.inputs.commit_message }}" ]]; then
+            git commit -m "${{ github.event.inputs.commit_message }}"
+          else
+            git commit -m "v${VERSION#v}"
+          fi
+          
+          git push
